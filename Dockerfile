@@ -8,7 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libglib2.0-0 libgl1 \
+    && apt-get install -y --no-install-recommends libgl1 \
+    && if ! apt-get install -y --no-install-recommends libglib2.0-0; then \
+        apt-get install -y --no-install-recommends libglib2.0-0t64; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

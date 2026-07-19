@@ -39,3 +39,4 @@ site/
 # Docker overrides and local artifacts
 docker-compose.override.yml
 compose.override.yml
+.idea
