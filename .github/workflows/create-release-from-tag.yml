@@ -1,0 +1,70 @@
+on:
+  push:
+    tags:
+      - 'v*'
+
+name: Create Release
+
+jobs:
+  build:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@master
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+        run: |
+          gh release create "$tag" \
+              --repo="$GITHUB_REPOSITORY" \
+              --title="${GITHUB_REPOSITORY#*/} ${tag#v}" \
+              --generate-notes
+  build_docker_images:
+    # Job name that shows in the GitHub UI
+    name: 'Build Docker Images'
+    # Runner to use
+    runs-on: ubuntu-latest
+    permissions: write-all
+
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v4
+
+      - name: 'Get the release version'
+        id: strip-branch-name
+        run: |
+          release_version=$(echo "${{ github.ref_name }}")
+          docker_version=$(echo $release_version | sed 's/v//')
+          echo "Building release version $release_version"
+          echo "RELEASE_VERSION=$release_version" >> $GITHUB_ENV
+          echo "DOCKER_VERSION=$docker_version" >> $GITHUB_ENV
+
+      - name: 'Login to GitHub Container Registry'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 'Set up QEMU'
+        uses: docker/setup-qemu-action@v3
+
+      - name: 'Set up Docker Buildx'
+        uses: docker/setup-buildx-action@v3
+
+      - name: 'Build and push Docker image'
+        uses: docker/build-push-action@v6
+        with:
+          cache-from: type=registry,ref=ghcr.io/steffjenl/indicatoreye:cache
+          cache-to: type=registry,ref=ghcr.io/steffjenl/indicatoreye:cache,mode=max
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64, linux/arm64, linux/arm/v7
+          build-args: |
+            RELEASE_VERSION=${{env.RELEASE_VERSION}}
+          push: true
+          tags: |
+            ghcr.io/steffjenl/indicatoreye:${{env.RELEASE_VERSION}}
+            ghcr.io/steffjenl/indicatoreye:latest

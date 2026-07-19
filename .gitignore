@@ -1,0 +1,41 @@
+.DS_Store
+
+# Local runtime config
+config/config.json
+
+# Python virtual environments
+.venv/
+.venv312/
+venv/
+env/
+
+# Python caches and compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
+site/
+*.egg-info/
+.eggs/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Docker overrides and local artifacts
+docker-compose.override.yml
+compose.override.yml
