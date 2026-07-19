@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import requests
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 CONFIG_PATH = Path(os.getenv("CONFIG_PATH", "/config/config.json"))
 
@@ -25,12 +25,43 @@ class LampConfig(BaseModel):
     min_color_score: float = 0.08
 
 
+class ImageConfig(BaseModel):
+    name: str
+    snapshot_url: str
+    timeout_seconds: Optional[int] = None
+    lamps: List[LampConfig]
+
+
 class ServiceConfig(BaseModel):
-    snapshot_url: Optional[str] = None
     timeout_seconds: int = 10
     tls_verify: bool = False
     jpeg_quality: int = 85
-    lamps: List[LampConfig]
+    images: List[ImageConfig]
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_config(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        if "images" in data:
+            return data
+
+        snapshot_url = data.get("snapshot_url")
+        lamps = data.get("lamps")
+        if snapshot_url is None and lamps is None:
+            return data
+
+        migrated = {key: value for key, value in data.items() if key not in {"snapshot_url", "lamps", "name"}}
+        migrated["images"] = [
+            {
+                "name": data.get("name", "default"),
+                "snapshot_url": snapshot_url,
+                "timeout_seconds": data.get("timeout_seconds"),
+                "lamps": lamps or [],
+            }
+        ]
+        return migrated
 
 
 def load_config() -> ServiceConfig:
@@ -72,6 +103,19 @@ def read_image_from_upload(data: bytes) -> np.ndarray:
     if image is None:
         raise HTTPException(status_code=422, detail="Upload could not be decoded as an image")
     return image
+
+
+def resolve_image_config(config: ServiceConfig, image_name: Optional[str]) -> ImageConfig:
+    if image_name is None:
+        if len(config.images) == 1:
+            return config.images[0]
+        raise HTTPException(status_code=400, detail="Multiple images configured. Supply the 'image' query parameter.")
+
+    for image in config.images:
+        if image.name == image_name:
+            return image
+
+    raise HTTPException(status_code=404, detail=f"Image '{image_name}' not found")
 
 
 def circular_crop(image: np.ndarray, lamp: LampConfig) -> np.ndarray:
@@ -141,11 +185,12 @@ def analyze_lamp(image: np.ndarray, lamp: LampConfig) -> Dict[str, Any]:
     }
 
 
-def analyze_image(image: np.ndarray, config: ServiceConfig) -> Dict[str, Any]:
-    lamps = [analyze_lamp(image, lamp) for lamp in config.lamps]
+def analyze_uploaded_image(image: np.ndarray, image_config: ImageConfig) -> Dict[str, Any]:
+    lamps = [analyze_lamp(image, lamp) for lamp in image_config.lamps]
     return {
         "ok": True,
         "checked_at": int(time.time()),
+        "source": image_config.name,
         "image": {
             "width": int(image.shape[1]),
             "height": int(image.shape[0]),
@@ -154,29 +199,64 @@ def analyze_image(image: np.ndarray, config: ServiceConfig) -> Dict[str, Any]:
     }
 
 
+def analyze_configured_image(image_config: ImageConfig, config: ServiceConfig) -> Dict[str, Any]:
+    timeout_seconds = image_config.timeout_seconds or config.timeout_seconds
+    image = read_image_from_url(image_config.snapshot_url, timeout_seconds, config.tls_verify)
+    lamps = [analyze_lamp(image, lamp) for lamp in image_config.lamps]
+    return {
+        "name": image_config.name,
+        "snapshot_url": image_config.snapshot_url,
+        "timeout_seconds": timeout_seconds,
+        "image": {
+            "width": int(image.shape[1]),
+            "height": int(image.shape[0]),
+        },
+        "lamps": lamps,
+    }
+
+
+def analyze_all_configured_images(config: ServiceConfig) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "checked_at": int(time.time()),
+        "sources": [analyze_configured_image(image_config, config) for image_config in config.images],
+    }
+
+
 def filter_lamps(result: Dict[str, Any], lamp_name: Optional[str]) -> Dict[str, Any]:
     if lamp_name is None:
         return result
 
-    filtered_lamps = [lamp for lamp in result["lamps"] if lamp["name"] == lamp_name]
-    if not filtered_lamps:
+    filtered_sources = []
+    for source in result["sources"]:
+        filtered_lamps = [lamp for lamp in source["lamps"] if lamp["name"] == lamp_name]
+        if not filtered_lamps:
+            continue
+
+        filtered_source = dict(source)
+        filtered_source["lamps"] = filtered_lamps
+        filtered_sources.append(filtered_source)
+
+    if not filtered_sources:
         raise HTTPException(status_code=404, detail=f"Lamp '{lamp_name}' not found")
 
     filtered_result = dict(result)
-    filtered_result["lamps"] = filtered_lamps
+    filtered_result["sources"] = filtered_sources
     return filtered_result
 
 
 def to_homey_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+    multiple_sources = len(result["sources"]) > 1
     return {
         "success": True,
         "checked_at": result["checked_at"],
         "devices": [
             {
-                "name": lamp["name"],
+                "name": f"{source['name']}_{lamp['name']}" if multiple_sources else lamp["name"],
                 "on": lamp["on"],
             }
-            for lamp in result["lamps"]
+            for source in result["sources"]
+            for lamp in source["lamps"]
         ],
     }
 
@@ -191,15 +271,10 @@ def status(
     lamp: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
     config = load_config()
-    url = config.snapshot_url
-    if not url:
-        raise HTTPException(status_code=400, detail="No snapshot_url configured")
-
-    image = read_image_from_url(url, config.timeout_seconds, config.tls_verify)
-    result = analyze_image(image, config)
+    result = analyze_all_configured_images(config)
     result["request"] = {
-        "snapshot_url": url,
-        "timeout_seconds": config.timeout_seconds,
+        "source_count": len(config.images),
+        "default_timeout_seconds": config.timeout_seconds,
         "tls_verify": config.tls_verify,
     }
     return filter_lamps(result, lamp)
@@ -208,19 +283,15 @@ def status(
 @app.get("/homey")
 def homey(lamp: Optional[str] = Query(default=None)) -> Dict[str, Any]:
     config = load_config()
-    url = config.snapshot_url
-    if not url:
-        raise HTTPException(status_code=400, detail="No snapshot_url configured")
-
-    image = read_image_from_url(url, config.timeout_seconds, config.tls_verify)
-    result = analyze_image(image, config)
+    result = analyze_all_configured_images(config)
     filtered_result = filter_lamps(result, lamp)
     return to_homey_payload(filtered_result)
 
 
 @app.post("/analyze")
-async def analyze(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def analyze(file: UploadFile = File(...), image: Optional[str] = Query(default=None)) -> Dict[str, Any]:
     config = load_config()
     data = await file.read()
-    image = read_image_from_upload(data)
-    return analyze_image(image, config)
+    decoded_image = read_image_from_upload(data)
+    image_config = resolve_image_config(config, image)
+    return analyze_uploaded_image(decoded_image, image_config)

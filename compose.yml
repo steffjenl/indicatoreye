@@ -1,5 +1,6 @@
 services:
   indicatoreye:
+    image: ghcr.io/steffjenl/indicatoreye:${RELEASE_VERSION:-latest}
     build: .
     container_name: indicatoreye
     restart: unless-stopped

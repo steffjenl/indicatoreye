@@ -1,28 +1,49 @@
 {
-  "snapshot_url": "https://192.168.1.2/snapshot.jpeg",
   "timeout_seconds": 10,
   "tls_verify": false,
   "jpeg_quality": 85,
-  "lamps": [
+  "images": [
     {
-      "name": "orange",
-      "x": 355,
-      "y": 75,
-      "radius": 8,
-      "expected_color": "orange",
-      "min_brightness": 120.0,
-      "min_saturation": 110.0,
-      "min_color_score": 0.4
+      "name": "camera_1",
+      "snapshot_url": "https://192.168.1.2/snapshot.jpeg",
+      "lamps": [
+        {
+          "name": "orange",
+          "x": 355,
+          "y": 75,
+          "radius": 8,
+          "expected_color": "orange",
+          "min_brightness": 120.0,
+          "min_saturation": 110.0,
+          "min_color_score": 0.4
+        },
+        {
+          "name": "green",
+          "x": 383,
+          "y": 74,
+          "radius": 10,
+          "expected_color": "green",
+          "min_brightness": 110.0,
+          "min_saturation": 80.0,
+          "min_color_score": 0.5
+        }
+      ]
     },
     {
-      "name": "green",
-      "x": 383,
-      "y": 74,
-      "radius": 10,
-      "expected_color": "green",
-      "min_brightness": 110.0,
-      "min_saturation": 80.0,
-      "min_color_score": 0.5
+      "name": "camera_2",
+      "snapshot_url": "https://192.168.1.3/snapshot.jpeg",
+      "lamps": [
+        {
+          "name": "red",
+          "x": 120,
+          "y": 90,
+          "radius": 10,
+          "expected_color": "red",
+          "min_brightness": 100.0,
+          "min_saturation": 90.0,
+          "min_color_score": 0.35
+        }
+      ]
     }
   ]
 }
